@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Mobile Copilot</title>
+  <!-- Markdown Renderer -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, system-ui, sans-serif; }
+    body { background: #121212; color: #e0e0e0; height: 100vh; display: flex; flex-direction: column; padding: 12px; }
+    .status { font-size: 12px; color: #00e676; margin-bottom: 8px; }
+    .output-container { flex: 1; overflow-y: auto; background: #1e1e1e; padding: 10px; border-radius: 8px; margin-bottom: 10px; font-size: 14px; line-height: 1.4; }
+    .qa-block { margin-bottom: 12px; border-bottom: 1px solid #333; padding-bottom: 8px; }
+    .qa-block .q { color: #00e676; font-weight: bold; margin-bottom: 4px; }
+    .qa-block .a { color: #ddd; }
+    textarea { width: 100%; background: #2a2a2a; color: #fff; border: 1px solid #444; border-radius: 6px; padding: 8px; font-size: 14px; resize: none; outline: none; }
+    .controls { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+    .btn { padding: 12px; border-radius: 6px; border: none; font-weight: bold; font-size: 14px; cursor: pointer; }
+    .btn-green { background: #00e676; color: #000; }
+    .btn-purple { background: #7c4dff; color: #fff; }
+    .toggle-bar { font-size: 12px; color: #aaa; display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+  </style>
+</head>
+<body>
+
+  <div class="status" id="statusIndicator">🎙️ Ready...</div>
+
+  <div class="output-container" id="outputContainer"></div>
+
+  <div class="input-container">
+    <div class="toggle-bar">
+      <input type="checkbox" id="appendToggle" checked />
+      <label for="appendToggle">Append mode (Combine speech)</label>
+    </div>
+    <textarea id="userInput" placeholder="Transcribed question or text appears here..." rows="3"></textarea>
+    <div class="controls">
+      <button id="recordBtn" class="btn btn-purple">🎙️ Tap to Record Audio</button>
+      <button id="askBtn" class="btn btn-green">Ask Copilot</button>
+    </div>
+  </div>
+
+  <script>
+    // Config: Replace with your Groq API Key (or route through your own server)
+    const GROQ_API_KEY = ""__GROQ_API_KEY__";";
+
+    const userInput = document.getElementById('userInput');
+    const askBtn = document.getElementById('askBtn');
+    const recordBtn = document.getElementById('recordBtn');
+    const appendToggle = document.getElementById('appendToggle');
+    const outputContainer = document.getElementById('outputContainer');
+    const statusIndicator = document.getElementById('statusIndicator');
+
+    let mediaRecorder;
+    let audioChunks = [];
+    let isRecording = false;
+
+    // -----------------------------------------------------------
+    // 1. Handle "Ask Copilot" Click
+    // -----------------------------------------------------------
+    askBtn.addEventListener('click', async () => {
+      const promptText = userInput.value.trim();
+      if (!promptText) return;
+
+      askBtn.disabled = true;
+      statusIndicator.innerText = "🧠 Generating response...";
+
+      // Create new Q&A Block in UI
+      const qaBlock = document.createElement('div');
+      qaBlock.className = 'qa-block';
+
+      const questionDiv = document.createElement('div');
+      questionDiv.className = 'q';
+      questionDiv.innerText = `Q: ${promptText}`;
+
+      const answerDiv = document.createElement('div');
+      answerDiv.className = 'a';
+      answerDiv.innerText = "Thinking...";
+
+      qaBlock.appendChild(questionDiv);
+      qaBlock.appendChild(answerDiv);
+      outputContainer.appendChild(qaBlock);
+
+      // Scroll to bottom
+      outputContainer.scrollTop = outputContainer.scrollHeight;
+
+      try {
+        const responseText = await fetchGroqCompletion(promptText);
+        
+        // Render Markdown into HTML
+        if (window.marked) {
+          answerDiv.innerHTML = window.marked.parse(responseText);
+        } else {
+          answerDiv.innerText = responseText;
+        }
+
+        statusIndicator.innerText = "✅ Complete.";
+      } catch (err) {
+        answerDiv.innerText = `Error: ${err.message}`;
+        statusIndicator.innerText = "❌ Request Failed.";
+      } finally {
+        askBtn.disabled = false;
+        outputContainer.scrollTop = outputContainer.scrollHeight;
+      }
+    });
+
+    // -----------------------------------------------------------
+    // 2. Fetch Completion from Groq API
+    // -----------------------------------------------------------
+    async function fetchGroqCompletion(prompt) {
+      if (!GROQ_API_KEY || GROQ_API_KEY === "YOUR_GROQ_API_KEY_HERE") {
+        throw new Error("Please add your Groq API key in index.html script.");
+      }
+
+      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${GROQ_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: "openai/gpt-oss-120b",
+          messages: [
+            { role: "system", content: "You are a concise, highly accurate interview assistant. Provide direct code or succinct answers." },
+            { role: "user", content: prompt }
+          ],
+          temperature: 0.2
+        })
+      });
+
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error?.message || "Failed to fetch response");
+      }
+
+      const data = await res.json();
+      return data.choices[0].message.content;
+    }
+
+    // -----------------------------------------------------------
+    // 3. Simple Recording Handler
+    // -----------------------------------------------------------
+    recordBtn.addEventListener('click', async () => {
+      if (!isRecording) {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          mediaRecorder = new MediaRecorder(stream);
+          audioChunks = [];
+
+          mediaRecorder.ondataavailable = (e) => audioChunks.push(e.data);
+          mediaRecorder.onstop = () => {
+            statusIndicator.innerText = "🎙️ Audio recorded.";
+          };
+
+          mediaRecorder.start();
+          isRecording = true;
+          recordBtn.innerText = "⏹️ Stop Recording";
+          statusIndicator.innerText = "🎙️ Listening...";
+        } catch (err) {
+          alert("Mic Error: " + err.message);
+        }
+      } else {
+        mediaRecorder.stop();
+        isRecording = false;
+        recordBtn.innerText = "🎙️ Tap to Record Audio";
+      }
+    });
+  </script>
+</body>
+</html>
